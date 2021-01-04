@@ -8,13 +8,29 @@
 DOLPHIN_DIR="$HOME/.local/share/dolphin-emu/Dump"
 VID_DIR="$HOME/Videos"
 
+# Compatibility with dolphin developer releases
+cd "$DOLPHIN_DIR/Frames" || exit 1
+
+for f in ./*
+do
+    case $f in
+    ./RMCE01*)
+        COUNT=$(( COUNT + 1 ))
+        ;;
+    esac
+done
+
+if test "$COUNT" -le 1
+then
+    mv RMCE01* framedump0.avi 2>/dev/null
+else
+    echo "Multiple framedumps detected! Exiting."
+    exit 1
+fi
+
 # Set video type
 printf "Video Type: [title/run/fullvid/none]: "
 read -r VIDEO_TYPE
-
-# Compatibility with dolphin developer releases
-cd "$DOLPHIN_DIR/Frames" || exit 1
-mv RMCE01* framedump0.avi 2>/dev/null
 
 case "$VIDEO_TYPE" in
 "title")
@@ -56,7 +72,7 @@ case "$VIDEO_TYPE" in
         -i "$DOLPHIN_DIR/Audio/dspdump.wav" -c:v h264_nvenc \
         -profile:v high -preset slow -rc vbr_2pass -qmin 17 -qmax 22 \
         -2pass 1 -c:a:0 copy -b:v 100000k \
-        -filter:v scale=3840:2160:flags=neighbor,fade=in:0:90 \
+        -filter:v scale=3840:2160:flags=neighbor \
         "$VID_DIR/output.avi"
     ;;
 *)
