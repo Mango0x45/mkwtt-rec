@@ -1,13 +1,12 @@
 #!/usr/bin/env sh
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# ~ Automatically edit MKWii runs recording through Dolphin ~
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~ Automatically rename .rkg files for easy scrubbing ~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# Set directories
 PROGNAME=$(basename "$0")
-DOLPHIN_DIR="$HOME/.local/share/dolphin-emu/Dump"
-VID_DIR="$HOME/Videos"
+GHOST_DIR="$HOME/Downloads"
+WIISCRUB_DIR="$HOME/Documents/MKWRecording/WiiScrubber"
 
 invalid_flag() {
     echo "$PROGNAME: invalid option -- '$OPTARG'
@@ -18,21 +17,25 @@ Try '$PROGNAME --help' for more information." 1>&2
 get_help() {
     cat <<EOF
 Usage: $PROGNAME [OPTION]...
-Merge a Dolphin framedump and audiodump into one 4K video with optional effects
-Example: $PROGNAME --video="~/Videos/MKWTTs"
+Scrub a ghost file to be imported into Dolphin
+Example: $PROGNAME -f "00m42s8430772 Mango Man.rkg" -t rDKJP
 
 Options:
-  -d, --dolphin=DIRECTORY   path to Dolphin's dump directory; defaults to
-                              ~/.local/share/dolphin-emu/Dump
+  -f, --file=FILE           path to the ghost file; defaults to ~/Downloads/*.rkg
   -h, --help                display this help text and exit
+  -t, --track               the track the ghost was driven on; uses track name
+                              abbrevations with a leading 'r' for retros such as
+                              rGV2, DKSC, RR
   -v, --version             display version information and exit
-      --video=DIRECTORY     path to the videos directory; defaults to ~/Videos
+  -w, --wiiscrub=DIRECTORY  directory containing the WiiScrubber executable;
+                              defaults to ~/Documents/MKWRecording/WiiScrubber
 
 Exit status:
  0  if OK,
  1  if invalid flag or missing option
- 2  if invalid directory
- 3  if conflicting framedumps
+ 2  if invalid ghost file
+ 3  if invalid WiiScrubber directory
+ 4  if fails to launch wine
 
 Source code: <https://www.github.com/Mango0x45/mkwtt-rec>
 EOF
@@ -44,53 +47,72 @@ get_version() {
     exit 0
 }
 
-test_dir() {
-    if test ! -d "$1"; then
-        echo "$PROGNAME: invalid directory '$1'"
+test_file() {
+    if test ! -f "$1"; then
+        echo "$PROGNAME: invalid ghost file '$1'"
         exit 2
     fi
 }
 
-while getopts ":-:d:hv" FLAG; do
+test_dir() {
+    if test ! -d "$1"; then
+        echo "$PROGNAME: invalid directory '$1'"
+        exit 3
+    fi
+}
+
+while getopts ":-:f:ht:vw:" FLAG; do
     case $FLAG in
     -)
         case $OPTARG in
-        dolphin)
-            DOLPHIN_DIR=$(eval echo \$$OPTIND)
-            test_dir "$DOLPHIN_DIR"
+        file)
+            FILE=$(eval echo \$$OPTIND)
+            test_file "$FILE"
             ;;
-        dolphin=*)
-            DOLPHIN_DIR=$(echo "$OPTARG" | cut -d "=" -f 2)
-            test_dir "$DOLPHIN_DIR"
+        file=*)
+            FILE=$(echo "$OPTARG" | cut -d "=" -f 2)
+            test_file "$FILE"
             ;;
         help)
             get_help
             ;;
+        track)
+            TRACK=$(eval echo \$$OPTIND)
+            ;;
+        track=*)
+            TRACK=$(echo "$OPTARG" | cut -d "=" -f 2)
+            ;;
         version)
             get_version
             ;;
-        video)
-            VID_DIR=$(eval echo \$$OPTIND)
-            test_dir "$VID_DIR"
+        wiiscrub)
+            WIISCRUB_DIR=$(eval echo \$$OPTIND)
+            test_dir "$WIISCRUB_DIR"
             ;;
-        video=*)
-            VID_DIR=$(echo "$OPTARG" | cut -d "=" -f 2)
-            test_dir "$VID_DIR"
+        wiiscrub=*)
+            WIISCRUB_DIR=$(echo "$OPTARG" | cut -d "=" -f 2)
+            test_dir "$WIISCRUB_DIR"
             ;;
         *)
             invalid_flag
             ;;
         esac
         ;;
-    d)
-        DOLPHIN_DIR=$OPTARG
-        test_dir "$DOLPHIN_DIR"
+    f)
+        FILE=$OPTARG
+        test_file "$FILE"
         ;;
     h)
         get_help
         ;;
+    t)
+        TRACK=$OPTARG
+        ;;
     v)
         get_version
+        ;;
+    w)
+        WIISCRUB_DIR=$OPTARG
         ;;
     *)
         invalid_flag
@@ -98,75 +120,126 @@ while getopts ":-:d:hv" FLAG; do
     esac
 done
 
-# Compatibility with dolphin developer releases
-cd "$DOLPHIN_DIR/Frames" || exit 1
-
-for f in ./*; do
-    case $f in
-    ./RMCE01*)
-        COUNT=$((COUNT + 1))
-        ;;
-    esac
-done
-
-if test "$COUNT" -le 1; then
-    mv RMCE01* framedump0.avi 2>/dev/null
-else
-    echo "Multiple framedumps detected! Exiting."
-    exit 3
+if test ! -n "$TRACK"; then
+    printf "Track: "
+    read -r TRACK
 fi
 
-# Set video type
-printf "Video Type: [title/run/fullvid/none]: "
-read -r VIDEO_TYPE
-
-case "$(echo "$VIDEO_TYPE" | tr '[:upper:]' '[:lower:]')" in
-title)
-    ffmpeg -loglevel quiet -y -i "$DOLPHIN_DIR/Frames/framedump0.avi" \
-        -i "$DOLPHIN_DIR/Audio/dspdump.wav" -c:v h264_nvenc \
-        -profile:v high -preset slow -rc vbr_2pass -qmin 17 -qmax 22 \
-        -2pass 1 -c:a:0 copy -b:v 100000k \
-        -filter:v fade=in:0:90,scale=3840:2160:flags=neighbor,fade=in:0:90 \
-        "$VID_DIR/output.avi"
+# Case insensitive matching
+case $(echo "$TRACK" | tr '[:lower:]' '[:upper:]') in
+LC)
+    TRACK_ID=00
     ;;
-fullvid | run)
-    # Calculate the start of the fade out
-    ffmpeg -loglevel quiet -y -i "$DOLPHIN_DIR/Frames/framedump0.avi" \
-        -filter:v scale=1:1 "$VID_DIR/temp.avi"
-    DURATION=$(ffprobe -i "$VID_DIR/temp.avi" \
-        -show_entries stream=codec_type,duration \
-        -of compact=p=0:nk=1 | awk -F\| '{print $2}')
-    FADE_OUT_START=$(echo "$DURATION / .016666666 - 150" | bc)
-
-    # Runs have fade out, full videos have fade in and fade out
-    if test "$VIDEO_TYPE" = "run"; then
-        ffmpeg -loglevel quiet -y -i "$DOLPHIN_DIR/Frames/framedump0.avi" \
-            -i "$DOLPHIN_DIR/Audio/dspdump.wav" -c:v h264_nvenc \
-            -profile:v high -preset slow -rc vbr_2pass -qmin 17 -qmax 22 \
-            -2pass 1 -c:a:0 copy -b:v 100000k \
-            -filter:v fade=out:"$FADE_OUT_START":90,scale=3840:2160:flags=neighbor,fade=in:0:90 \
-            "$VID_DIR/output.avi"
-    else
-        ffmpeg -loglevel quiet -y -i "$DOLPHIN_DIR/Frames/framedump0.avi" \
-            -i "$DOLPHIN_DIR/Audio/dspdump.wav" -c:v h264_nvenc \
-            -profile:v high -preset slow -rc vbr_2pass -qmin 17 -qmax 22 \
-            -2pass 1 -c:a:0 copy -b:v 100000k \
-            -filter:v fade=in:0:90,fade=out:"$FADE_OUT_START":90,scale=3840:2160:flags=neighbor,fade=in:0:90 \
-            "$VID_DIR/output.avi"
-    fi
+MMM)
+    TRACK_ID=01
     ;;
-none)
-    ffmpeg -loglevel quiet -y -i "$DOLPHIN_DIR/Frames/framedump0.avi" \
-        -i "$DOLPHIN_DIR/Audio/dspdump.wav" -c:v h264_nvenc \
-        -profile:v high -preset slow -rc vbr_2pass -qmin 17 -qmax 22 \
-        -2pass 1 -c:a:0 copy -b:v 100000k \
-        -filter:v scale=3840:2160:flags=neighbor \
-        "$VID_DIR/output.avi"
+MG)
+    TRACK_ID=02
+    ;;
+TF)
+    TRACK_ID=03
+    ;;
+MC)
+    TRACK_ID=04
+    ;;
+CM)
+    TRACK_ID=05
+    ;;
+DKSC | DKS)
+    TRACK_ID=06
+    ;;
+WGM)
+    TRACK_ID=07
+    ;;
+DC)
+    TRACK_ID=08
+    ;;
+KC)
+    TRACK_ID=09
+    ;;
+MT)
+    TRACK_ID=11
+    ;;
+GV)
+    TRACK_ID=10
+    ;;
+DDR)
+    TRACK_ID=13
+    ;;
+MH)
+    TRACK_ID=12
+    ;;
+BC)
+    TRACK_ID=14
+    ;;
+RR)
+    TRACK_ID=15
+    ;;
+RPB)
+    TRACK_ID=24
+    ;;
+RYF)
+    TRACK_ID=28
+    ;;
+RGV2)
+    TRACK_ID=17
+    ;;
+RMR)
+    TRACK_ID=21
+    ;;
+RSL)
+    TRACK_ID=20
+    ;;
+RSGB)
+    TRACK_ID=16
+    ;;
+RDS)
+    TRACK_ID=31
+    ;;
+RWS)
+    TRACK_ID=26
+    ;;
+RDH)
+    TRACK_ID=29
+    ;;
+RBC3)
+    TRACK_ID=19
+    ;;
+RDKJP)
+    TRACK_ID=22
+    ;;
+RMC)
+    TRACK_ID=25
+    ;;
+RMC3)
+    TRACK_ID=18
+    ;;
+RPG)
+    TRACK_ID=30
+    ;;
+RDKM)
+    TRACK_ID=27
+    ;;
+RBC)
+    TRACK_ID=23
     ;;
 *)
-    echo Invalid selection
+    echo "$PROGNAME: invalid track '$TRACK'"
+    exit 1
     ;;
 esac
 
-# Cleanup
-test -e "$VID_DIR/temp.avi" && rm "$VID_DIR/temp.avi"
+echo Track ID: $TRACK_ID
+
+test -d "$WIISCRUB_DIR/../Ghosts" || mkdir "$WIISCRUB_DIR/../Ghosts"
+
+if test -n "$FILE"; then
+    cp "$FILE" "$WIISCRUB_DIR/../Ghosts/ghost1_comp_$TRACK_ID"
+    cp "$FILE" "$WIISCRUB_DIR/../Ghosts/ghost2_comp_$TRACK_ID"
+else
+    cp "$GHOST_DIR/*.rkg" "$WIISCRUB_DIR/../Ghosts/ghost1_comp_$TRACK_ID"
+    cp "$GHOST_DIR/*.rkg" "$WIISCRUB_DIR/../Ghosts/ghost2_comp_$TRACK_ID"
+fi
+
+cd "$WIISCRUB_DIR" || exit 1
+wine WIIScrubber.exe || exit 4
