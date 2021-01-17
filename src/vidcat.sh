@@ -112,7 +112,7 @@ if test "$AFLAG" -eq 1; then
     ffmpeg -i concat.avi -i concat.wav -c copy output.avi
 
     # Cleanup
-    rm "$CONCAT" concat.avi ./*.wav
+    rm aconcat.txt concat.avi ./*.wav
 else
     ffmpeg -f concat -safe 0 -i "$CONCAT" -c copy output.avi
 fi
